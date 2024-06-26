@@ -1,116 +1,98 @@
-type LogInput =
-  | string
-  | number
-  | Error
-  | Record<"string | number | symbol", unknown>;
-type LogLevel = "error" | "warn" | "info" | "debug";
+// Features
+// Log means to receive information and send it to somewhere
+// Transport means a place that a log will be send to ex. terminal, third-party API, database, ...
 
-type LoggerInput = {
-  level: LogLevel;
-  preHooks: ((log: LogMessage) => void)[];
-  format: (log: LogMessage) => string;
-  transports: ((log: LogMessage) => void)[];
-};
+import { TerminalTransport, Transport } from './transports/transports'
+import {
+  DefaultLogLevelInput,
+  LoggerGlobalOptions,
+  Message
+} from './globalTypes'
+
+// Feat 1: Can log to a user's terminal
+
+// Feat 2: Can log at difference level of severity
+// => Derive from Winston
+// => RFC5424 severity of all levels is assumed to be numerically ascending from most important to least important.
+
+// Feat 3: Can log to multiple transports
+// => User's terminal count as one type of transport
+// => Each transport have to work in parallel
+// => Each transport can have its own settings (level, etc)
+
+// Feat 4: Can format log message before logging
+// => Format means to add or to filter out data from the message
+// => Each transport can have its own format
+
+// TODO: Implement formatter module
+// https://github.com/winstonjs/logform?tab=readme-ov-file#understanding-formats
+// Format => define a single method: transform(info, opts) and return the mutated info
+
+export type LoggerInput = {
+  globalOptions: LoggerGlobalOptions
+  transports?: Transport[]
+}
 export class Logger {
-  // Log Level => Log only this level or above
-  private level: LogLevel;
+  private globalOptions: LoggerGlobalOptions
+  private transports: Transport[]
 
-  // PreHook => Add or filter data
-  private preHooks: ((log: LogMessage) => void)[];
+  constructor({ globalOptions, transports }: LoggerInput) {
+    this.globalOptions = globalOptions
 
-  // Formatter (default) => Format message into a shape that compatible with the transport
-  private format: (log: LogMessage) => string;
-
-  // PostHook => where to send the log to (default is a terminal)
-  private transports: ((log: LogMessage) => void)[];
-
-  constructor(input: LoggerInput) {
-    this.level = input.level;
-    this.preHooks = input.preHooks;
-    this.format = input.format;
-    this.transports = input.transports;
-  }
-
-  // ควรใส่ Argument ได้เรื่อยๆ แบบ Console.log
-  private log(message: LogInput): void {
-    // Create log message
-    const log = new LogMessage({
-      level: this.level,
-      message: message,
-      format: this.format,
-    });
-
-    // Check logger level to determine operation continuity
-    if (!log.shouldOperate) {
-      return;
+    // Inject terminal transport
+    if (typeof transports === 'undefined' || transports.length === 0) {
+      this.transports = [new TerminalTransport(this.globalOptions)]
+      return
     }
 
-    // Modify the message for filter or add additional information
-    this.preHooks.forEach((prehook) => {
-      prehook(log);
-    });
+    this.transports = transports
 
-    // Send message to each transport with terminal as a default
-    this.transports.push((log) => {
-      console.log(log);
-    });
+    // Handle case user want to overwrite Terminal transport
+    const haveTerminalTransport = this.transports.find(
+      transport => transport instanceof TerminalTransport
+    )
 
-    // Should start at the same time
+    if (!haveTerminalTransport) {
+      this.transports.push(new TerminalTransport(this.globalOptions))
+    }
+  }
+
+  public log(level: DefaultLogLevelInput, message: Message): void {
+    // send message and global settings to each transport
+    const sendLogs = this.transports.map(transport =>
+      transport.log(this.globalOptions, message)
+    )
+
     try {
-      this.transports.forEach((prehook) => {
-        prehook(log);
-      });
-    } catch (error) {}
+      Promise.allSettled(sendLogs) // To start
+    } catch (error) {
+      // Send log to user's terminal
+      return
+    }
   }
 
-  public error(message: LogInput): void {
-    this.log(message);
+  public error(message: Message): void {
+    this.log('error', message)
   }
 
-  public warn(message: LogInput): void {
-    this.log(message);
+  public warning(message: Message): void {
+    this.log('warning', message)
   }
 
-  public info(message: LogInput): void {
-    this.log(message);
+  public info(message: Message): void {
+    this.log('info', message)
   }
 
-  public debug(message: LogInput): void {
-    this.log(message);
-  }
-}
-
-type LogMessageInput = {
-  level: LogLevel;
-  message: LogInput;
-  format: (log: LogMessage) => string;
-};
-export class LogMessage {
-  // เกิดที่ไหน, เกิดเมื่อไหร่, ร้ายแรงแค่ไหน, มีข้อมูลอะไรให้ทราบบ้าง, ควรทำอย่างไรต่อ (Optional)
-  public readonly level: LogLevel;
-  public readonly message: LogInput;
-  public readonly meta: Record<string, unknown>;
-  public readonly createdAt: Date;
-  public readonly format: () => string;
-
-  constructor(input: LogMessageInput) {
-    this.level = input.level;
-    this.message = input.message;
-    this.meta = {};
-    this.createdAt = new Date(); // What is the format. What is the time zone
-
-    // Kinda werid, help!!
-    this.format = () => {
-      return input.format(this);
-    };
+  public debug(message: Message): void {
+    this.log('debug', message)
   }
 
-  public shouldOperate(): boolean {
-    // Base on level of log
-    return true;
-  }
-
-  public addField(name: string, value: unknown) {
-    this.meta[name] = value;
+  public verbose(message: Message): void {
+    this.log('verbose', message)
   }
 }
+
+const logger = new Logger({
+  globalOptions: { level: 'verbose' },
+  transports: []
+})
